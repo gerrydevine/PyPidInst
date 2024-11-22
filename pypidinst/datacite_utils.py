@@ -2,7 +2,7 @@ import os
 import datetime
 from dotenv import load_dotenv
 from base64 import b64encode
-from config import DOI_PREFIX
+from pypidinst.config import DOI_PREFIX
 
 load_dotenv()
 

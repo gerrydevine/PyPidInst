@@ -1,5 +1,5 @@
 import unittest
-from instrument import Instrument, Identifier, Owner, OwnerIdentifier, Manufacturer, ManufacturerIdentifier, Model, ModelIdentifier, RelatedIdentifier
+from pypidinst.instrument import Instrument, Identifier, Owner, OwnerIdentifier, Manufacturer, ManufacturerIdentifier, Model, ModelIdentifier, RelatedIdentifier
 
 class TestInstruments(unittest.TestCase):
 
