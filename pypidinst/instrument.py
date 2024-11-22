@@ -5,7 +5,7 @@ Research Instrument module following the PIDINST schema
 
 import requests
 import uuid
-from vocabs import INSTRUMENT_IDENTIFIER_TYPES, OWNER_IDENTIFIER_TYPES, MANUFACTURER_IDENTIFIER_TYPES, RELATED_IDENTIFIER_TYPES, RELATED_IDENTIFIER_RELATION_TYPES 
+from pypidinst.vocabs import INSTRUMENT_IDENTIFIER_TYPES, OWNER_IDENTIFIER_TYPES, MANUFACTURER_IDENTIFIER_TYPES, RELATED_IDENTIFIER_TYPES, RELATED_IDENTIFIER_RELATION_TYPES 
 from config import DATACITE_URL
 from datacite_utils import datacite_login, generate_datacite_payload
 
