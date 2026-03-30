@@ -5,9 +5,13 @@ Research Instrument module following the PIDINST schema
 
 import requests
 import uuid
-from pypidinst.vocabs import INSTRUMENT_IDENTIFIER_TYPES, OWNER_IDENTIFIER_TYPES, MANUFACTURER_IDENTIFIER_TYPES, RELATED_IDENTIFIER_TYPES, RELATED_IDENTIFIER_RELATION_TYPES 
+from pypidinst.vocabs import INSTRUMENT_IDENTIFIER_TYPES, OWNER_IDENTIFIER_TYPES, MANUFACTURER_IDENTIFIER_TYPES, MODEL_IDENTIFIER_TYPES, RELATED_IDENTIFIER_TYPES, RELATED_IDENTIFIER_RELATION_TYPES 
 from pypidinst.config import DATACITE_URL
 from pypidinst.datacite_utils import datacite_login, generate_datacite_payload
+
+
+# Maximum length for string fields (name, identifier values, etc.)
+MAX_STRING_LENGTH = 200
 
 
 class PIDInst():
@@ -16,7 +20,7 @@ class PIDInst():
     See https://doi.org/10.15497/RDA00070
 
     Args:
-        Name (mandatory): Common name of the Instrument Instance   
+        name (mandatory): Common name of the Instrument Instance   
         landing_page: URL of instrument landing page (must begin 'http' or 'https')
 
     """
@@ -24,7 +28,7 @@ class PIDInst():
     # Current PIDInst schema version
     _schema_version = 1.0
 
-    def __init__(self, landing_page:str = None, name:str = None, description:str = None, model:object = None, owners:list = None, manufacturers:list = None, related_identifiers:list = None):
+    def __init__(self, name:str, landing_page:str = None, description:str = None, model:object = None, owners:list = None, manufacturers:list = None, related_identifiers:list = None):
         # self.local_id = str(uuid.uuid4())
         self.identifier = None
         self.landing_page = landing_page
@@ -66,8 +70,8 @@ class PIDInst():
             raise TypeError("name must be a string")
         if value == '':
             raise ValueError("name cannot be an empty string")
-        if len(value) >= 200:
-            raise ValueError("name must be less than 200 chars")
+        if len(value) >= MAX_STRING_LENGTH:
+            raise ValueError(f"name must be less than {MAX_STRING_LENGTH} chars")
         self._name = value
 
     @property
@@ -121,6 +125,16 @@ class PIDInst():
         self._related_identifiers = value
 
     def set_identifier(self, identifier):
+        """
+        Set the persistent identifier for this instrument.
+        
+        Args:
+            identifier (Identifier): An Identifier instance
+            
+        Raises:
+            ValueError: If an identifier is already set
+            TypeError: If identifier is not an Identifier instance
+        """
         if self.identifier:
             raise ValueError("This Instrument record already has an identifier allocated")
           
@@ -128,41 +142,109 @@ class PIDInst():
             raise TypeError("Identifier must be instance of Identifier class")
         self.identifier = identifier
 
-    def append_owner(self, owner):          
+    def append_owner(self, owner):
+        """
+        Add an owner to this instrument's list of owners.
+        
+        Args:
+            owner (Owner): An Owner instance
+            
+        Raises:
+            TypeError: If owner is not an Owner instance
+        """
         if not isinstance(owner, Owner):
             raise TypeError("owner must be instance of Owner class")
         self.owners.append(owner)
 
-    def append_manufacturer(self, manufacturer):          
+    def append_manufacturer(self, manufacturer):
+        """
+        Add a manufacturer to this instrument's list of manufacturers.
+        
+        Args:
+            manufacturer (Manufacturer): A Manufacturer instance
+            
+        Raises:
+            TypeError: If manufacturer is not a Manufacturer instance
+        """
         if not isinstance(manufacturer, Manufacturer):
             raise TypeError("manufacturer must be instance of Manufacturer class")
         self.manufacturers.append(manufacturer)
 
-    def append_related_identifier(self, related_identifier):          
+    def append_related_identifier(self, related_identifier):
+        """
+        Add a related identifier to this instrument's list of related identifiers.
+        
+        Args:
+            related_identifier (RelatedIdentifier): A RelatedIdentifier instance
+            
+        Raises:
+            TypeError: If related_identifier is not a RelatedIdentifier instance
+        """
         if not isinstance(related_identifier, RelatedIdentifier):
             raise TypeError("related_identifier must be instance of RelatedIdentifier class")
         self.related_identifiers.append(related_identifier)
 
-    def set_model(self, model):          
+    def set_model(self, model):
+        """
+        Set the instrument model.
+        
+        Args:
+            model (Model): A Model instance
+            
+        Raises:
+            TypeError: If model is not a Model instance
+        """
         if not isinstance(model, Model):
             raise TypeError("model must be instance of Model class")
         self.model = model
 
     def is_valid_for_doi(self):
-        ''' Returns whether or not record is valid for doi allocation via Datacite '''
-
-        if self._schema_version and self.landing_page and self.name and len(self.manufacturers) and len(self.owners) > 0 and self.identifier is None:
-            return True
+        """
+        Returns whether or not record is valid for DOI allocation via DataCite.
         
-        return False
+        A record is valid for DOI allocation if it has:
+        - Schema version
+        - Landing page URL
+        - Name
+        - At least one manufacturer
+        - At least one owner
+        - No existing identifier
+        
+        Returns:
+            bool: True if valid for DOI allocation, False otherwise
+        """
+        return (
+            self._schema_version is not None
+            and self.landing_page is not None
+            and self.name is not None
+            and len(self.manufacturers) > 0
+            and len(self.owners) > 0
+            and self.identifier is None
+        )
 
     def is_valid_pidinst(self):
-        ''' Returns whether or not record is valid PIDInst (all mandatory fields present) '''
-
-        if self._schema_version and self.landing_page and self.name and self.manufacturers and self.identifier and self.owners:
-            return True
+        """
+        Returns whether or not record is a valid PIDInst (all mandatory fields present).
         
-        return False
+        A record is a valid PIDInst if it has:
+        - Schema version
+        - Landing page URL
+        - Name
+        - At least one manufacturer
+        - At least one owner
+        - An identifier
+        
+        Returns:
+            bool: True if valid PIDInst record, False otherwise
+        """
+        return (
+            self._schema_version is not None
+            and self.landing_page is not None
+            and self.name is not None
+            and len(self.manufacturers) > 0
+            and self.identifier is not None
+            and len(self.owners) > 0
+        )
 
 
 class Instrument(PIDInst):
@@ -170,18 +252,30 @@ class Instrument(PIDInst):
     Research Instrument
 
     Args:
-        Name (mandatory): Common name of the Instrument Instance   
+        name (mandatory): Common name of the Instrument Instance   
         landing_page: URL of instrument landing page (must begin 'http' or 'https')
 
     """
 
-    def __init__(self, landing_page:str = None, name:str = None, description:str = None, model:object = None, owners:list=None, manufacturers:list=None, related_identifiers:list=None):
-        super().__init__(landing_page, name, description, model, owners, manufacturers, related_identifiers)
+    def __init__(self, name:str, landing_page:str = None, description:str = None, model:object = None, owners:list=None, manufacturers:list=None, related_identifiers:list=None):
+        super().__init__(name, landing_page, description, model, owners, manufacturers, related_identifiers)
         self.local_id = str(uuid.uuid4())
 
     def allocate_doi(self):
-        ''' Allocate a new DOI identifier to this Instrument ''' 
-
+        """
+        Allocate a new DOI identifier for this instrument via DataCite.
+        
+        This method:
+        1. Validates that the instrument has sufficient metadata for DOI allocation
+        2. Authenticates with DataCite
+        3. Submits the instrument metadata to DataCite
+        4. Creates and assigns the returned DOI as the instrument's identifier
+        
+        Raises:
+            ValueError: If an identifier already exists or if the record lacks 
+                       required metadata for DOI allocation
+            requests.exceptions.HTTPError: If DataCite returns an HTTP error
+        """
         # Check if an identifier already exists and exit if so
         if self.identifier:
             raise ValueError("This Instrument record already has an identifier allocated")
@@ -204,7 +298,7 @@ class Instrument(PIDInst):
             resp = requests.post(url, json=datacite_payload, headers=headers) 
             resp.raise_for_status()
         except requests.exceptions.HTTPError as err:
-            raise SystemExit(err)
+            raise
 
         identifier = Identifier(identifier_value=resp.json()['data']['id'], identifier_type="DOI")
         self.set_identifier(identifier)
@@ -213,7 +307,7 @@ class Instrument(PIDInst):
 class Identifier():
     """ Persistent Identifier """
 
-    def __init__(self, identifier_value:str = None, identifier_type:str = None):
+    def __init__(self, identifier_value:str, identifier_type:str):
         self.identifier_value = identifier_value
         self.identifier_type = identifier_type
 
@@ -235,8 +329,8 @@ class Identifier():
             raise TypeError("Identifier Value must be a string")
         if value == '':
             raise ValueError("Identifier Value cannot be an empty string")
-        if len(value) >= 200:
-            raise ValueError("Identifier Value must be less than 200 chars")
+        if len(value) >= MAX_STRING_LENGTH:
+            raise ValueError(f"Identifier Value must be less than {MAX_STRING_LENGTH} chars")
         self._identifier_value = value
     
     @property
@@ -257,7 +351,7 @@ class Identifier():
 class OwnerIdentifier():
     """ PIDInst Owner Identifier """
 
-    def __init__(self, owner_identifier_value:str = None, owner_identifier_type:str = None):
+    def __init__(self, owner_identifier_value:str, owner_identifier_type:str):
         self.owner_identifier_value = owner_identifier_value
         self.owner_identifier_type = owner_identifier_type
 
@@ -297,7 +391,7 @@ class OwnerIdentifier():
 class Owner():
     """ Owner Class """
 
-    def __init__(self, owner_name:str = None, owner_contact:str = None):
+    def __init__(self, owner_name:str, owner_contact:str = None):
         self.owner_identifier = None
         self.owner_name = owner_name
         self.owner_contact = owner_contact
@@ -320,8 +414,8 @@ class Owner():
             raise TypeError("owner_name must be a string")
         if value == '':
             raise ValueError("Owner name cannot be an empty string")
-        if len(value) >= 200:
-            raise ValueError("Owner name must be less than 200 chars")
+        if len(value) >= MAX_STRING_LENGTH:
+            raise ValueError(f"Owner name must be less than {MAX_STRING_LENGTH} chars")
         self._owner_name = value
     
     @property
@@ -336,18 +430,28 @@ class Owner():
         self._owner_contact = value
 
     def set_owner_identifier(self, owner_identifier):
-      if self.owner_identifier:
-          raise ValueError("This owner record already has an owner identifier allocated")
-          
-      if not isinstance(owner_identifier, OwnerIdentifier):
-          raise TypeError("Owner Identifier must be instance of OwnerIdentifier class")
-      self.owner_identifier = owner_identifier
+        """
+        Set the identifier for this owner.
+        
+        Args:
+            owner_identifier (OwnerIdentifier): An OwnerIdentifier instance
+            
+        Raises:
+            ValueError: If an owner identifier is already set
+            TypeError: If owner_identifier is not an OwnerIdentifier instance
+        """
+        if self.owner_identifier:
+            raise ValueError("This owner record already has an owner identifier allocated")
+            
+        if not isinstance(owner_identifier, OwnerIdentifier):
+            raise TypeError("Owner Identifier must be instance of OwnerIdentifier class")
+        self.owner_identifier = owner_identifier
     
 
 class ManufacturerIdentifier():
     """ PIDInst Manufacturer Identifier """
 
-    def __init__(self, manufacturer_identifier_value:str = None, manufacturer_identifier_type:str = None):
+    def __init__(self, manufacturer_identifier_value:str, manufacturer_identifier_type:str):
         self.manufacturer_identifier_value = manufacturer_identifier_value
         self.manufacturer_identifier_type = manufacturer_identifier_type
 
@@ -387,7 +491,7 @@ class ManufacturerIdentifier():
 class Manufacturer():
     """ Manufacturer Class """
 
-    def __init__(self, manufacturer_name:str = None):
+    def __init__(self, manufacturer_name:str):
         self.manufacturer_identifier = None
         self.manufacturer_name = manufacturer_name
 
@@ -409,23 +513,33 @@ class Manufacturer():
             raise TypeError("manufacturer_name must be a string")
         if value == '':
             raise ValueError("manufacturer_name cannot be an empty string")
-        if len(value) >= 200:
-            raise ValueError("manufacturer_name must be less than 200 chars")
+        if len(value) >= MAX_STRING_LENGTH:
+            raise ValueError(f"manufacturer_name must be less than {MAX_STRING_LENGTH} chars")
         self._manufacturer_name = value
 
     def set_manufacturer_identifier(self, manufacturer_identifier):
-      if self.manufacturer_identifier:
-          raise ValueError("This manufacturer record already has an manufacturer identifier allocated")
-          
-      if not isinstance(manufacturer_identifier, ManufacturerIdentifier):
-          raise TypeError("Manufacturer Identifier must be instance of ManufacturerIdentifier class")
-      self.manufacturer_identifier = manufacturer_identifier
+        """
+        Set the identifier for this manufacturer.
+        
+        Args:
+            manufacturer_identifier (ManufacturerIdentifier): A ManufacturerIdentifier instance
+            
+        Raises:
+            ValueError: If a manufacturer identifier is already set
+            TypeError: If manufacturer_identifier is not a ManufacturerIdentifier instance
+        """
+        if self.manufacturer_identifier:
+            raise ValueError("This manufacturer record already has a manufacturer identifier allocated")
+            
+        if not isinstance(manufacturer_identifier, ManufacturerIdentifier):
+            raise TypeError("Manufacturer Identifier must be instance of ManufacturerIdentifier class")
+        self.manufacturer_identifier = manufacturer_identifier
 
 
 class ModelIdentifier():
     """ Instrument Model Identifier """
 
-    def __init__(self, model_identifier_value:str = None, model_identifier_type:str = None):
+    def __init__(self, model_identifier_value:str, model_identifier_type:str):
         self.model_identifier_value = model_identifier_value
         self.model_identifier_type = model_identifier_type
 
@@ -457,13 +571,15 @@ class ModelIdentifier():
             raise ValueError("Model Identifier Type cannot be None")
         if not isinstance(value, str):
             raise TypeError("Model Identifier Type must be a string")
-        self._manufacturer_identifier_type = value
+        if value not in MODEL_IDENTIFIER_TYPES:
+            raise ValueError("Model Identifier Type not recognised")
+        self._model_identifier_type = value
 
 
 class Model():
     """ Instrument Model Class """
 
-    def __init__(self, model_name:str = None):
+    def __init__(self, model_name:str):
         self.model_identifier = None
         self.model_name = model_name
 
@@ -485,23 +601,33 @@ class Model():
             raise TypeError("model_name must be a string")
         if value == '':
             raise ValueError("model_name cannot be an empty string")
-        if len(value) >= 200:
-            raise ValueError("model_name must be less than 200 chars")
+        if len(value) >= MAX_STRING_LENGTH:
+            raise ValueError(f"model_name must be less than {MAX_STRING_LENGTH} chars")
         self._model_name = value
 
     def set_model_identifier(self, model_identifier):
-      if self.model_identifier:
-          raise ValueError("This model record already has an model identifier allocated")
-          
-      if not isinstance(model_identifier, ModelIdentifier):
-          raise TypeError("Model Identifier must be instance of ModelIdentifier class")
-      self.model_identifier = model_identifier
+        """
+        Set the identifier for this model.
+        
+        Args:
+            model_identifier (ModelIdentifier): A ModelIdentifier instance
+            
+        Raises:
+            ValueError: If a model identifier is already set
+            TypeError: If model_identifier is not a ModelIdentifier instance
+        """
+        if self.model_identifier:
+            raise ValueError("This model record already has a model identifier allocated")
+            
+        if not isinstance(model_identifier, ModelIdentifier):
+            raise TypeError("Model Identifier must be instance of ModelIdentifier class")
+        self.model_identifier = model_identifier
 
 
 class RelatedIdentifier():
     """ Related Identifier Class """
 
-    def __init__(self, related_identifier_value:str = None, related_identifier_type:str = None, related_identifier_relation_type:str = None, related_identifier_name:str = None):
+    def __init__(self, related_identifier_value:str, related_identifier_type:str, related_identifier_relation_type:str, related_identifier_name:str = None):
         self.related_identifier_value = related_identifier_value
         self.related_identifier_type = related_identifier_type
         self.related_identifier_relation_type = related_identifier_relation_type
@@ -525,8 +651,8 @@ class RelatedIdentifier():
             raise TypeError("related_identifier_value must be a string")
         if value == '':
             raise ValueError("related_identifier_value cannot be an empty string")
-        if len(value) >= 200:
-            raise ValueError("related_identifier_value must be less than 200 chars")
+        if len(value) >= MAX_STRING_LENGTH:
+            raise ValueError(f"related_identifier_value must be less than {MAX_STRING_LENGTH} chars")
         self._related_identifier_value = value
     
     @property

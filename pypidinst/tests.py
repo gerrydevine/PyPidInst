@@ -1,5 +1,7 @@
 import unittest
+from unittest.mock import patch, Mock
 from pypidinst.instrument import Instrument, Identifier, Owner, OwnerIdentifier, Manufacturer, ManufacturerIdentifier, Model, ModelIdentifier, RelatedIdentifier
+import requests
 
 class TestInstruments(unittest.TestCase):
 
@@ -64,10 +66,11 @@ class TestInstruments(unittest.TestCase):
         self.assertEqual(str(exc.exception), "landing_page must start with either http or https")
 
     # NAME TESTS
-    def test_empty_name_error(self):
-        with self.assertRaises(ValueError) as exc:
+    def test_missing_name_error(self):
+        """Test that name is a required parameter"""
+        with self.assertRaises(TypeError) as exc:
             Instrument(landing_page='https://www.landingpage.com')
-        self.assertEqual(str(exc.exception), "name cannot be None")
+        self.assertIn("missing 1 required positional argument: 'name'", str(exc.exception))
 
     def test_non_string_name_error(self):
         with self.assertRaises(TypeError) as exc:
@@ -279,6 +282,95 @@ class TestInstruments(unittest.TestCase):
     def test_allocate_doi_complete_info(self):
         pass
 
+    @patch('pypidinst.instrument.datacite_login')
+    @patch('pypidinst.instrument.generate_datacite_payload')
+    @patch('pypidinst.instrument.requests.post')
+    def test_allocate_doi_http_error_401(self, mock_post, mock_payload, mock_login):
+        """Test that HTTP 401 error is properly raised, not SystemExit (Bug #3 regression test)"""
+        # Setup
+        mock_login.return_value = 'Bearer fake_token'
+        mock_payload.return_value = {'data': 'fake_payload'}
+        
+        # Simulate 401 Unauthorized error
+        mock_response = Mock()
+        mock_response.raise_for_status.side_effect = requests.exceptions.HTTPError("401 Unauthorized")
+        mock_post.return_value = mock_response
+        
+        # Create valid instrument
+        instrument = Instrument(
+            landing_page='https://www.landingpage.com', 
+            name="Instrument XYZ"
+        )
+        manufacturer = Manufacturer(manufacturer_name="Acme Inc")
+        instrument.append_manufacturer(manufacturer)
+        owner = Owner(owner_name="Jane Doe")
+        instrument.append_owner(owner)
+        
+        # Should raise HTTPError, not SystemExit
+        with self.assertRaises(requests.exceptions.HTTPError) as exc:
+            instrument.allocate_doi()
+        self.assertIn("401", str(exc.exception))
+
+    @patch('pypidinst.instrument.datacite_login')
+    @patch('pypidinst.instrument.generate_datacite_payload')
+    @patch('pypidinst.instrument.requests.post')
+    def test_allocate_doi_http_error_500(self, mock_post, mock_payload, mock_login):
+        """Test that HTTP 500 error is properly raised, not SystemExit (Bug #3 regression test)"""
+        # Setup
+        mock_login.return_value = 'Bearer fake_token'
+        mock_payload.return_value = {'data': 'fake_payload'}
+        
+        # Simulate 500 Server Error
+        mock_response = Mock()
+        mock_response.raise_for_status.side_effect = requests.exceptions.HTTPError("500 Server Error")
+        mock_post.return_value = mock_response
+        
+        # Create valid instrument
+        instrument = Instrument(
+            landing_page='https://www.landingpage.com', 
+            name="Instrument XYZ"
+        )
+        manufacturer = Manufacturer(manufacturer_name="Acme Inc")
+        instrument.append_manufacturer(manufacturer)
+        owner = Owner(owner_name="Jane Doe")
+        instrument.append_owner(owner)
+        
+        # Should raise HTTPError, not SystemExit
+        with self.assertRaises(requests.exceptions.HTTPError) as exc:
+            instrument.allocate_doi()
+        self.assertIn("500", str(exc.exception))
+
+    @patch('pypidinst.instrument.datacite_login')
+    @patch('pypidinst.instrument.generate_datacite_payload')
+    @patch('pypidinst.instrument.requests.post')
+    def test_allocate_doi_success(self, mock_post, mock_payload, mock_login):
+        """Test successful DOI allocation"""
+        # Setup
+        mock_login.return_value = 'Bearer fake_token'
+        mock_payload.return_value = {'data': 'fake_payload'}
+        
+        # Simulate successful response
+        mock_response = Mock()
+        mock_response.raise_for_status.return_value = None  # No error
+        mock_response.json.return_value = {'data': {'id': '10.1234/test.doi'}}
+        mock_post.return_value = mock_response
+        
+        # Create valid instrument
+        instrument = Instrument(
+            landing_page='https://www.landingpage.com', 
+            name="Instrument XYZ"
+        )
+        manufacturer = Manufacturer(manufacturer_name="Acme Inc")
+        instrument.append_manufacturer(manufacturer)
+        owner = Owner(owner_name="Jane Doe")
+        instrument.append_owner(owner)
+        
+        # Should succeed and set identifier
+        instrument.allocate_doi()
+        self.assertIsNotNone(instrument.identifier)
+        self.assertEqual(instrument.identifier.identifier_value, '10.1234/test.doi')
+        self.assertEqual(instrument.identifier.identifier_type, 'DOI')
+
 
 class TestIdentifiers(unittest.TestCase):
 
@@ -290,10 +382,11 @@ class TestIdentifiers(unittest.TestCase):
         identifier = Identifier(identifier_value="2381/12345", identifier_type="Handle")
         self.assertIsInstance(identifier, Identifier, 'Something went wrong with Identifier class instantation')
 
-    def test_empty_identifier_type(self):
-        with self.assertRaises(ValueError) as exc:
+    def test_missing_identifier_type(self):
+        """Test that identifier_type is a required parameter"""
+        with self.assertRaises(TypeError) as exc:
             Identifier(identifier_value="2381/12345")
-        self.assertEqual(str(exc.exception), "Identifier Type cannot be None")
+        self.assertIn("missing 1 required positional argument: 'identifier_type'", str(exc.exception))
 
     def test_invalid_identifier_type_type(self):
         with self.assertRaises(TypeError) as exc:
@@ -305,10 +398,11 @@ class TestIdentifiers(unittest.TestCase):
             Identifier(identifier_value="2381/12345", identifier_type="DUMMY")
         self.assertEqual(str(exc.exception), "Identifier Type not recognised")
 
-    def test_empty_identifier_value(self):
-        with self.assertRaises(ValueError) as exc:
+    def test_missing_identifier_value(self):
+        """Test that identifier_value is a required parameter"""
+        with self.assertRaises(TypeError) as exc:
             Identifier(identifier_type="DOI")
-        self.assertEqual(str(exc.exception), "Identifier Value cannot be None")
+        self.assertIn("missing 1 required positional argument: 'identifier_value'", str(exc.exception))
 
     def test_invalid_identifier_value_type(self):
         with self.assertRaises(TypeError) as exc:
@@ -353,15 +447,17 @@ class TestOwners(unittest.TestCase):
 
 class TestOwnerIdentifiers(unittest.TestCase):
 
-    def test_invalid_empty_owner_identifier_value(self):
-        with self.assertRaises(ValueError) as exc:
-            OwnerIdentifier(owner_identifier_value=None, owner_identifier_type=None) 
-        self.assertEqual(str(exc.exception), "Owner Identifier Value cannot be None")
+    def test_missing_owner_identifier_value(self):
+        """Test that owner_identifier_value is a required parameter"""
+        with self.assertRaises(TypeError) as exc:
+            OwnerIdentifier(owner_identifier_type='ORCID') 
+        self.assertIn("missing 1 required positional argument", str(exc.exception))
 
-    def test_invalid_no_owner_identifier_type(self):
-        with self.assertRaises(ValueError) as exc:
-            OwnerIdentifier(owner_identifier_value='0000-1111-2222-3333', owner_identifier_type=None) 
-        self.assertEqual(str(exc.exception), "Owner Identifier Type cannot be None")
+    def test_missing_owner_identifier_type(self):
+        """Test that owner_identifier_type is a required parameter"""
+        with self.assertRaises(TypeError) as exc:
+            OwnerIdentifier(owner_identifier_value='0000-1111-2222-3333') 
+        self.assertIn("missing 1 required positional argument", str(exc.exception))
 
     def test_invalid_owner_identifier_type(self):
         with self.assertRaises(ValueError) as exc:
@@ -396,15 +492,17 @@ class TestManufacturers(unittest.TestCase):
 
 class TestManufacturerIdentifiers(unittest.TestCase):
     
-    def test_invalid_empty_manufacturer_identifier_value(self):
-        with self.assertRaises(ValueError) as exc:
-            ManufacturerIdentifier(manufacturer_identifier_value=None, manufacturer_identifier_type=None) 
-        self.assertEqual(str(exc.exception), "Manufacturer Identifier Value cannot be None")
+    def test_missing_manufacturer_identifier_value(self):
+        """Test that manufacturer_identifier_value is a required parameter"""
+        with self.assertRaises(TypeError) as exc:
+            ManufacturerIdentifier(manufacturer_identifier_type='URL') 
+        self.assertIn("missing 1 required positional argument", str(exc.exception))
 
-    def test_invalid_empty_manufacturer_identifier_type(self):
-        with self.assertRaises(ValueError) as exc:
-            ManufacturerIdentifier(manufacturer_identifier_value='0000-1111-2222-3333', manufacturer_identifier_type=None) 
-        self.assertEqual(str(exc.exception), "Manufacturer Identifier Type cannot be None")
+    def test_missing_manufacturer_identifier_type(self):
+        """Test that manufacturer_identifier_type is a required parameter"""
+        with self.assertRaises(TypeError) as exc:
+            ManufacturerIdentifier(manufacturer_identifier_value='0000-1111-2222-3333') 
+        self.assertIn("missing 1 required positional argument", str(exc.exception))
 
     def test_invalid_manufacturer_identifier_type(self):
         with self.assertRaises(ValueError) as exc:
@@ -436,20 +534,22 @@ class TestModels(unittest.TestCase):
         with self.assertRaises(ValueError) as exc:
             model_identifier_2 = ModelIdentifier(model_identifier_value="DEF456", model_identifier_type='URL') 
             model.set_model_identifier(model_identifier_2)
-        self.assertEqual(str(exc.exception), "This model record already has an model identifier allocated")
+        self.assertEqual(str(exc.exception), "This model record already has a model identifier allocated")
 
 
 class TestModelIdentifiers(unittest.TestCase):
     
-    def test_invalid_empty_model_identifier_value(self):
-        with self.assertRaises(ValueError) as exc:
-            ModelIdentifier(model_identifier_value=None, model_identifier_type=None) 
-        self.assertEqual(str(exc.exception), "Model Identifier Value cannot be None")
+    def test_missing_model_identifier_value(self):
+        """Test that model_identifier_value is a required parameter"""
+        with self.assertRaises(TypeError) as exc:
+            ModelIdentifier(model_identifier_type='URL') 
+        self.assertIn("missing 1 required positional argument", str(exc.exception))
 
-    def test_invalid_empty_model_identifier_type(self):
-        with self.assertRaises(ValueError) as exc:
-            ModelIdentifier(model_identifier_value='XYZ123', model_identifier_type=None) 
-        self.assertEqual(str(exc.exception), "Model Identifier Type cannot be None")
+    def test_missing_model_identifier_type(self):
+        """Test that model_identifier_type is a required parameter"""
+        with self.assertRaises(TypeError) as exc:
+            ModelIdentifier(model_identifier_value='XYZ123') 
+        self.assertIn("missing 1 required positional argument", str(exc.exception))
 
     def test_invalid_model_identifier_value(self):
         with self.assertRaises(TypeError) as exc:
@@ -460,6 +560,20 @@ class TestModelIdentifiers(unittest.TestCase):
         with self.assertRaises(TypeError) as exc:
             ModelIdentifier(model_identifier_value='XYZ123', model_identifier_type=123) 
         self.assertEqual(str(exc.exception), "Model Identifier Type must be a string")
+
+    def test_model_identifier_type_storage(self):
+        """Test that model_identifier_type is correctly stored and retrieved (Bug #1 regression test)"""
+        model_identifier = ModelIdentifier(model_identifier_value='ABC123', model_identifier_type='URL')
+        self.assertEqual(model_identifier.model_identifier_type, 'URL', 
+                        'Model identifier type not correctly stored or retrieved')
+        self.assertEqual(model_identifier.model_identifier_value, 'ABC123',
+                        'Model identifier value not correctly stored or retrieved')
+
+    def test_invalid_model_identifier_type_not_in_vocab(self):
+        """Test that invalid model_identifier_type raises ValueError"""
+        with self.assertRaises(ValueError) as exc:
+            ModelIdentifier(model_identifier_value='ABC123', model_identifier_type='INVALID_TYPE')
+        self.assertEqual(str(exc.exception), "Model Identifier Type not recognised")
 
 
 class TestRelatedIdentifiers(unittest.TestCase):
@@ -472,30 +586,33 @@ class TestRelatedIdentifiers(unittest.TestCase):
         related_identifier = RelatedIdentifier(related_identifier_value="https://www.pathtopaper.edu.au", related_identifier_type="URL", related_identifier_relation_type="IsDescribedBy")
         self.assertIsInstance(related_identifier, RelatedIdentifier, 'Something went wrong with related identifier class instantation')
 
-    def test_invalid_no_value(self):
-        with self.assertRaises(ValueError) as exc:
+    def test_missing_value(self):
+        """Test that related_identifier_value is a required parameter"""
+        with self.assertRaises(TypeError) as exc:
             RelatedIdentifier(related_identifier_type="URL", related_identifier_relation_type="IsDescribedBy")
-        self.assertEqual(str(exc.exception), "related_identifier_value cannot be None")
+        self.assertIn("missing 1 required positional argument", str(exc.exception))
 
     def test_invalid_empty_value(self):
         with self.assertRaises(ValueError) as exc:
             RelatedIdentifier(related_identifier_value="", related_identifier_type="URL", related_identifier_relation_type="IsDescribedBy", related_identifier_name="Documentation Paper")
         self.assertEqual(str(exc.exception), "related_identifier_value cannot be an empty string")
 
-    def test_invalid_no_identifier_type(self):
-        with self.assertRaises(ValueError) as exc:
+    def test_missing_identifier_type(self):
+        """Test that related_identifier_type is a required parameter"""
+        with self.assertRaises(TypeError) as exc:
             RelatedIdentifier(related_identifier_value="https://www.pathtopaper.edu.au", related_identifier_relation_type="IsDescribedBy")
-        self.assertEqual(str(exc.exception), "related_identifier_type cannot be None")
+        self.assertIn("missing 1 required positional argument", str(exc.exception))
 
     def test_invalid_identifier_type(self):
         with self.assertRaises(ValueError) as exc:
             RelatedIdentifier(related_identifier_value="https://www.pathtopaper.edu.au", related_identifier_type="ABC", related_identifier_relation_type="IsDescribedBy")
         self.assertEqual(str(exc.exception), "Related Identifier Type not recognised")
 
-    def test_invalid_no_relation_type(self):
-        with self.assertRaises(ValueError) as exc:
+    def test_missing_relation_type(self):
+        """Test that related_identifier_relation_type is a required parameter"""
+        with self.assertRaises(TypeError) as exc:
             RelatedIdentifier(related_identifier_value="https://www.pathtopaper.edu.au", related_identifier_type="URL")
-        self.assertEqual(str(exc.exception), "related_identifier_relation_type cannot be None")
+        self.assertIn("missing 1 required positional argument", str(exc.exception))
 
     def test_invalid_relation_type(self):
         with self.assertRaises(ValueError) as exc:
@@ -562,6 +679,74 @@ class TestValidations(unittest.TestCase):
         instrument.append_manufacturer(manufacturer)
 
         self.assertFalse(instrument.is_valid_pidinst(), 'Something went wrong with PIDInst validation')
+
+    def test_valid_for_doi_all_requirements_met(self):
+        """Test that is_valid_for_doi returns True when all requirements are met (Bug #2 regression test)"""
+        # Initialise Instrument with all required fields for DOI
+        instrument = Instrument(
+            landing_page='https://www.landingpage.com', 
+            name="Instrument XYZ", 
+        )
+        # Manufacturer
+        manufacturer = Manufacturer(manufacturer_name="Acme Inc")
+        instrument.append_manufacturer(manufacturer)
+        # Owner
+        owner = Owner(owner_name="Jane Doe", owner_contact="jane.doe@email.com")
+        instrument.append_owner(owner)
+
+        self.assertTrue(instrument.is_valid_for_doi(), 'Valid instrument should be ready for DOI allocation')
+
+    def test_invalid_for_doi_no_manufacturers(self):
+        """Test that is_valid_for_doi returns False when manufacturers list is empty (Bug #2 regression test)"""
+        instrument = Instrument(
+            landing_page='https://www.landingpage.com', 
+            name="Instrument XYZ", 
+        )
+        # Owner but no manufacturer
+        owner = Owner(owner_name="Jane Doe", owner_contact="jane.doe@email.com")
+        instrument.append_owner(owner)
+
+        self.assertFalse(instrument.is_valid_for_doi(), 'Instrument without manufacturers should not be valid for DOI')
+
+    def test_invalid_for_doi_no_owners(self):
+        """Test that is_valid_for_doi returns False when owners list is empty (Bug #2 regression test)"""
+        instrument = Instrument(
+            landing_page='https://www.landingpage.com', 
+            name="Instrument XYZ", 
+        )
+        # Manufacturer but no owner
+        manufacturer = Manufacturer(manufacturer_name="Acme Inc")
+        instrument.append_manufacturer(manufacturer)
+
+        self.assertFalse(instrument.is_valid_for_doi(), 'Instrument without owners should not be valid for DOI')
+
+    def test_invalid_for_doi_no_landing_page(self):
+        """Test that is_valid_for_doi returns False when landing_page is None"""
+        instrument = Instrument(
+            name="Instrument XYZ", 
+        )
+        manufacturer = Manufacturer(manufacturer_name="Acme Inc")
+        instrument.append_manufacturer(manufacturer)
+        owner = Owner(owner_name="Jane Doe", owner_contact="jane.doe@email.com")
+        instrument.append_owner(owner)
+
+        self.assertFalse(instrument.is_valid_for_doi(), 'Instrument without landing_page should not be valid for DOI')
+
+    def test_invalid_for_doi_identifier_exists(self):
+        """Test that is_valid_for_doi returns False when identifier already exists"""
+        instrument = Instrument(
+            landing_page='https://www.landingpage.com', 
+            name="Instrument XYZ", 
+        )
+        manufacturer = Manufacturer(manufacturer_name="Acme Inc")
+        instrument.append_manufacturer(manufacturer)
+        owner = Owner(owner_name="Jane Doe", owner_contact="jane.doe@email.com")
+        instrument.append_owner(owner)
+        # Set an identifier
+        identifier = Identifier(identifier_value="10.1000/existing", identifier_type="DOI")
+        instrument.set_identifier(identifier)
+
+        self.assertFalse(instrument.is_valid_for_doi(), 'Instrument with existing identifier should not be valid for DOI')
 
 
 if __name__ == '__main__':
