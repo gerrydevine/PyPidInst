@@ -13,7 +13,7 @@ A Python 3 library for working with the [PIDInst 1.0 Schema](https://doi.org/10.
 ## Installation
 
 ```bash
-pip install git+https://github.com/gerrydevine/unsw_pidinst.git
+pip install git+https://github.com/gerrydevine/pypidinst.git
 ```
 
 ## Requirements
