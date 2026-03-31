@@ -1,6 +1,6 @@
 import unittest
 from unittest.mock import patch, Mock
-from pypidinst.instrument import Instrument, Identifier, Owner, OwnerIdentifier, Manufacturer, ManufacturerIdentifier, Model, ModelIdentifier, RelatedIdentifier
+from pypidinst.instrument import PIDInst, Instrument, Identifier, Owner, OwnerIdentifier, Manufacturer, ManufacturerIdentifier, Model, ModelIdentifier, RelatedIdentifier
 import requests
 
 class TestInstruments(unittest.TestCase):
@@ -63,7 +63,7 @@ class TestInstruments(unittest.TestCase):
     def test_non_http_landing_page_error(self):
         with self.assertRaises(ValueError) as exc:
             Instrument(landing_page='www.landingpage.com', name="Instrument XYZ")
-        self.assertEqual(str(exc.exception), "landing_page must start with either http or https")
+        self.assertEqual(str(exc.exception), "landing_page must be a valid http or https URL")
 
     # NAME TESTS
     def test_missing_name_error(self):
@@ -343,16 +343,49 @@ class TestInstruments(unittest.TestCase):
     @patch('pypidinst.instrument.datacite_login')
     @patch('pypidinst.instrument.generate_datacite_payload')
     @patch('pypidinst.instrument.requests.post')
-    def test_allocate_doi_success(self, mock_post, mock_payload, mock_login):
-        """Test successful DOI allocation"""
+    def test_allocate_doi_timeout(self, mock_post, mock_payload, mock_login):
+        """Test that timeout error is properly raised when DataCite API times out"""
         # Setup
         mock_login.return_value = 'Bearer fake_token'
         mock_payload.return_value = {'data': 'fake_payload'}
         
-        # Simulate successful response
+        # Simulate timeout error
+        mock_post.side_effect = requests.exceptions.Timeout("Connection timeout")
+        
+        # Create valid instrument
+        instrument = Instrument(
+            landing_page='https://www.landingpage.com', 
+            name="Instrument XYZ"
+        )
+        manufacturer = Manufacturer(manufacturer_name="Acme Inc")
+        instrument.append_manufacturer(manufacturer)
+        owner = Owner(owner_name="Jane Doe")
+        instrument.append_owner(owner)
+        
+        # Should raise Timeout exception
+        with self.assertRaises(requests.exceptions.Timeout) as exc:
+            instrument.allocate_doi()
+        self.assertIn("DataCite API request timed out", str(exc.exception))
+
+    @patch('pypidinst.instrument.datacite_login')
+    @patch('pypidinst.instrument.generate_datacite_payload')
+    @patch('pypidinst.instrument.requests.post')
+    def test_allocate_doi_success(self, mock_post, mock_payload, mock_login):
+        """Test successful DOI allocation creates and sets an Identifier"""
+        # Setup
+        mock_login.return_value = 'Bearer fake_token'
+        mock_payload.return_value = {'data': 'fake_payload'}
+        
+        # Simulate successful DataCite response with proper structure
         mock_response = Mock()
-        mock_response.raise_for_status.return_value = None  # No error
-        mock_response.json.return_value = {'data': {'id': '10.1234/test.doi'}}
+        mock_response.json.return_value = {
+            'data': {
+                'id': '10.80402/test-doi-123',
+                'type': 'dois',
+                'attributes': {'doi': '10.80402/test-doi-123'}
+            }
+        }
+        mock_response.raise_for_status = Mock()
         mock_post.return_value = mock_response
         
         # Create valid instrument
@@ -365,11 +398,135 @@ class TestInstruments(unittest.TestCase):
         owner = Owner(owner_name="Jane Doe")
         instrument.append_owner(owner)
         
-        # Should succeed and set identifier
+        # Allocate DOI
         instrument.allocate_doi()
+        
+        # Verify identifier was created and set correctly
         self.assertIsNotNone(instrument.identifier)
-        self.assertEqual(instrument.identifier.identifier_value, '10.1234/test.doi')
-        self.assertEqual(instrument.identifier.identifier_type, 'DOI')
+        self.assertIsInstance(instrument.identifier, Identifier)
+        self.assertEqual(instrument.identifier.identifier_type, "DOI")
+        self.assertEqual(instrument.identifier.identifier_value, "10.80402/test-doi-123")
+
+    @patch('pypidinst.instrument.datacite_login')
+    @patch('pypidinst.instrument.generate_datacite_payload')
+    @patch('pypidinst.instrument.requests.post')
+    def test_allocate_doi_invalid_response_not_dict(self, mock_post, mock_payload, mock_login):
+        """Test that non-dict response from DataCite is rejected"""
+        mock_login.return_value = 'Bearer fake_token'
+        mock_payload.return_value = {'data': 'fake_payload'}
+        
+        # Simulate response that's not a dictionary
+        mock_response = Mock()
+        mock_response.json.return_value = "not a dict"
+        mock_response.raise_for_status = Mock()
+        mock_post.return_value = mock_response
+        
+        instrument = Instrument(landing_page='https://www.landingpage.com', name="Instrument XYZ")
+        manufacturer = Manufacturer(manufacturer_name="Acme Inc")
+        instrument.append_manufacturer(manufacturer)
+        owner = Owner(owner_name="Jane Doe")
+        instrument.append_owner(owner)
+        
+        with self.assertRaises(ValueError) as exc:
+            instrument.allocate_doi()
+        self.assertIn("invalid response format", str(exc.exception))
+
+    @patch('pypidinst.instrument.datacite_login')
+    @patch('pypidinst.instrument.generate_datacite_payload')
+    @patch('pypidinst.instrument.requests.post')
+    def test_allocate_doi_missing_data_field(self, mock_post, mock_payload, mock_login):
+        """Test that response missing 'data' field is rejected"""
+        mock_login.return_value = 'Bearer fake_token'
+        mock_payload.return_value = {'data': 'fake_payload'}
+        
+        # Simulate response missing 'data' field
+        mock_response = Mock()
+        mock_response.json.return_value = {"wrong_field": "value"}
+        mock_response.raise_for_status = Mock()
+        mock_post.return_value = mock_response
+        
+        instrument = Instrument(landing_page='https://www.landingpage.com', name="Instrument XYZ")
+        manufacturer = Manufacturer(manufacturer_name="Acme Inc")
+        instrument.append_manufacturer(manufacturer)
+        owner = Owner(owner_name="Jane Doe")
+        instrument.append_owner(owner)
+        
+        with self.assertRaises(ValueError) as exc:
+            instrument.allocate_doi()
+        self.assertIn("missing required 'data' field", str(exc.exception))
+
+    @patch('pypidinst.instrument.datacite_login')
+    @patch('pypidinst.instrument.generate_datacite_payload')
+    @patch('pypidinst.instrument.requests.post')
+    def test_allocate_doi_missing_id_field(self, mock_post, mock_payload, mock_login):
+        """Test that response missing 'id' field is rejected"""
+        mock_login.return_value = 'Bearer fake_token'
+        mock_payload.return_value = {'data': 'fake_payload'}
+        
+        # Simulate response with 'data' but missing 'id'
+        mock_response = Mock()
+        mock_response.json.return_value = {"data": {"other_field": "value"}}
+        mock_response.raise_for_status = Mock()
+        mock_post.return_value = mock_response
+        
+        instrument = Instrument(landing_page='https://www.landingpage.com', name="Instrument XYZ")
+        manufacturer = Manufacturer(manufacturer_name="Acme Inc")
+        instrument.append_manufacturer(manufacturer)
+        owner = Owner(owner_name="Jane Doe")
+        instrument.append_owner(owner)
+        
+        with self.assertRaises(ValueError) as exc:
+            instrument.allocate_doi()
+        self.assertIn("missing required 'id' field", str(exc.exception))
+
+    @patch('pypidinst.instrument.datacite_login')
+    @patch('pypidinst.instrument.generate_datacite_payload')
+    @patch('pypidinst.instrument.requests.post')
+    def test_allocate_doi_empty_doi_value(self, mock_post, mock_payload, mock_login):
+        """Test that empty DOI value is rejected"""
+        mock_login.return_value = 'Bearer fake_token'
+        mock_payload.return_value = {'data': 'fake_payload'}
+        
+        # Simulate response with empty DOI
+        mock_response = Mock()
+        mock_response.json.return_value = {"data": {"id": ""}}
+        mock_response.raise_for_status = Mock()
+        mock_post.return_value = mock_response
+        
+        instrument = Instrument(landing_page='https://www.landingpage.com', name="Instrument XYZ")
+        manufacturer = Manufacturer(manufacturer_name="Acme Inc")
+        instrument.append_manufacturer(manufacturer)
+        owner = Owner(owner_name="Jane Doe")
+        instrument.append_owner(owner)
+        
+        with self.assertRaises(ValueError) as exc:
+            instrument.allocate_doi()
+        self.assertIn("empty DOI value", str(exc.exception))
+
+    @patch('pypidinst.instrument.datacite_login')
+    @patch('pypidinst.instrument.generate_datacite_payload')
+    @patch('pypidinst.instrument.requests.post')
+    def test_allocate_doi_invalid_doi_format(self, mock_post, mock_payload, mock_login):
+        """Test that DOI not starting with '10.' is rejected"""
+        mock_login.return_value = 'Bearer fake_token'
+        mock_payload.return_value = {'data': 'fake_payload'}
+        
+        # Simulate response with invalid DOI format
+        mock_response = Mock()
+        mock_response.json.return_value = {"data": {"id": "invalid-doi-format"}}
+        mock_response.raise_for_status = Mock()
+        mock_post.return_value = mock_response
+        
+        instrument = Instrument(landing_page='https://www.landingpage.com', name="Instrument XYZ")
+        manufacturer = Manufacturer(manufacturer_name="Acme Inc")
+        instrument.append_manufacturer(manufacturer)
+        owner = Owner(owner_name="Jane Doe")
+        instrument.append_owner(owner)
+        
+        with self.assertRaises(ValueError) as exc:
+            instrument.allocate_doi()
+        self.assertIn("invalid DOI format", str(exc.exception))
+        self.assertIn("must start with '10.'", str(exc.exception))
 
 
 class TestIdentifiers(unittest.TestCase):
@@ -748,6 +905,47 @@ class TestValidations(unittest.TestCase):
 
         self.assertFalse(instrument.is_valid_for_doi(), 'Instrument with existing identifier should not be valid for DOI')
 
+    def test_landing_page_localhost_blocked(self):
+        """Test that landing_page blocks localhost URLs to prevent SSRF"""
+        with self.assertRaises(ValueError) as context:
+            PIDInst(landing_page="http://localhost:8080/instrument", name="Test")
+        self.assertIn("valid", str(context.exception))
+
+    def test_landing_page_internal_ip_blocked(self):
+        """Test that landing_page blocks internal IP addresses"""
+        with self.assertRaises(ValueError) as context:
+            PIDInst(landing_page="http://192.168.1.1/instrument", name="Test")
+        self.assertIn("valid", str(context.exception))
+
+    def test_landing_page_loopback_blocked(self):
+        """Test that landing_page blocks loopback IP"""
+        with self.assertRaises(ValueError) as context:
+            PIDInst(landing_page="http://127.0.0.1/instrument", name="Test")
+        self.assertIn("valid", str(context.exception))
+
+    def test_landing_page_invalid_scheme(self):
+        """Test that landing_page rejects non-http/https schemes"""
+        with self.assertRaises(ValueError) as context:
+            PIDInst(landing_page="ftp://example.com/instrument", name="Test")
+        self.assertIn("valid", str(context.exception))
+
+    def test_landing_page_malformed_url(self):
+        """Test that landing_page rejects malformed URLs"""
+        with self.assertRaises(ValueError) as context:
+            PIDInst(landing_page="http:malicious.com", name="Test")
+        self.assertIn("valid", str(context.exception))
+
+    def test_landing_page_valid_url(self):
+        """Test that landing_page accepts valid URLs"""
+        instrument = PIDInst(landing_page="https://example.com/instrument", name="Test")
+        self.assertEqual(instrument.landing_page, "https://example.com/instrument")
+
+    def test_landing_page_none_allowed(self):
+        """Test that landing_page can be None"""
+        instrument = PIDInst(name="Test")
+        self.assertIsNone(instrument.landing_page)
+
 
 if __name__ == '__main__':
     unittest.main()
+

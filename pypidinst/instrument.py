@@ -5,6 +5,7 @@ Research Instrument module following the PIDINST schema
 
 import requests
 import uuid
+from urllib.parse import urlparse
 from pypidinst.vocabs import INSTRUMENT_IDENTIFIER_TYPES, OWNER_IDENTIFIER_TYPES, MANUFACTURER_IDENTIFIER_TYPES, MODEL_IDENTIFIER_TYPES, RELATED_IDENTIFIER_TYPES, RELATED_IDENTIFIER_RELATION_TYPES 
 from pypidinst.config import DATACITE_URL
 from pypidinst.datacite_utils import datacite_login, generate_datacite_payload
@@ -12,6 +13,54 @@ from pypidinst.datacite_utils import datacite_login, generate_datacite_payload
 
 # Maximum length for string fields (name, identifier values, etc.)
 MAX_STRING_LENGTH = 200
+
+
+def is_valid_url(url):
+    """
+    Validate URL for security and correctness.
+    
+    Checks that:
+    - URL can be parsed
+    - Scheme is http or https
+    - Hostname is present
+    - URL doesn't point to localhost or internal IPs
+    
+    Args:
+        url: String URL to validate
+        
+    Returns:
+        True if valid, False otherwise
+    """
+    try:
+        parsed = urlparse(url)
+        
+        # Check scheme is http or https
+        if parsed.scheme not in ('http', 'https'):
+            return False
+            
+        # Check hostname exists
+        if not parsed.netloc:
+            return False
+            
+        # Block localhost and internal IPs to prevent SSRF
+        hostname = parsed.netloc.split(':')[0].lower()  # Remove port if present
+        blocked_hosts = {
+            'localhost',
+            '127.0.0.1',
+            '0.0.0.0',
+            '::1',
+            '[::1]'
+        }
+        if hostname in blocked_hosts:
+            return False
+            
+        # Block private IP ranges (basic check for common patterns)
+        if hostname.startswith('192.168.') or hostname.startswith('10.') or hostname.startswith('172.'):
+            return False
+            
+        return True
+    except Exception:
+        return False
 
 
 class PIDInst():
@@ -54,8 +103,8 @@ class PIDInst():
         if value is not None:
             if not isinstance(value, str):
                 raise TypeError("landing_page must be a string")
-            if not value.startswith('http'):
-                raise ValueError("landing_page must start with either http or https")
+            if not is_valid_url(value):
+                raise ValueError("landing_page must be a valid http or https URL")
         self._landing_page = value
 
     @property
@@ -265,43 +314,93 @@ class Instrument(PIDInst):
         """
         Allocate a new DOI identifier for this instrument via DataCite.
         
-        This method:
-        1. Validates that the instrument has sufficient metadata for DOI allocation
-        2. Authenticates with DataCite
-        3. Submits the instrument metadata to DataCite
-        4. Creates and assigns the returned DOI as the instrument's identifier
+        This method will:
+        1. Validate the instrument has all required fields
+        2. Authenticate with DataCite
+        3. Generate the metadata payload
+        4. POST to DataCite API to mint the DOI
+        5. Store the returned DOI as this instrument's identifier
         
         Raises:
-            ValueError: If an identifier already exists or if the record lacks 
-                       required metadata for DOI allocation
-            requests.exceptions.HTTPError: If DataCite returns an HTTP error
+            ValueError: If instrument is not valid for DOI allocation
+            requests.exceptions.HTTPError: If DataCite API returns an error
+            requests.exceptions.Timeout: If DataCite API request times out
         """
-        # Check if an identifier already exists and exit if so
-        if self.identifier:
+        # Check if identifier already exists first
+        if self.identifier is not None:
             raise ValueError("This Instrument record already has an identifier allocated")
         
+        # Then check if valid for DOI allocation
         if not self.is_valid_for_doi():
             raise ValueError("This record does not yet have sufficient content to allocate a DOI")
-        
-        # Set up Datacite POST parameters 
-        datacite_token = datacite_login()
-        url = DATACITE_URL
-        datacite_payload = generate_datacite_payload(self)
 
+        token = datacite_login()
+        datacite_payload = generate_datacite_payload(self)
+        url = DATACITE_URL
         headers = {
-            "accept": "application/vnd.api+json",
-            "content-type": "application/json",
-            'authorization': datacite_token
+            'Authorization': token,
+            'Content-Type': 'application/vnd.api+json'
         }
 
         try:
-            resp = requests.post(url, json=datacite_payload, headers=headers) 
+            resp = requests.post(
+                url, 
+                json=datacite_payload, 
+                headers=headers,
+                timeout=30  # 30 second timeout
+            )
             resp.raise_for_status()
+        except requests.exceptions.Timeout:
+            raise requests.exceptions.Timeout("DataCite API request timed out after 30 seconds")
         except requests.exceptions.HTTPError as err:
             raise
 
-        identifier = Identifier(identifier_value=resp.json()['data']['id'], identifier_type="DOI")
-        self.set_identifier(identifier)
+        # Validate DataCite API response structure
+        try:
+            response_data = resp.json()
+            
+            # Validate response is a dictionary
+            if not isinstance(response_data, dict):
+                raise ValueError("DataCite API returned invalid response format (not a JSON object)")
+            
+            # Validate 'data' field exists and is a dictionary
+            if 'data' not in response_data:
+                raise ValueError("DataCite API response missing required 'data' field")
+            
+            if not isinstance(response_data['data'], dict):
+                raise ValueError("DataCite API response 'data' field is not a JSON object")
+            
+            # Validate 'id' field exists in 'data'
+            if 'id' not in response_data['data']:
+                raise ValueError("DataCite API response missing required 'id' field in 'data'")
+            
+            doi_value = response_data['data']['id']
+            
+            # Validate DOI value is a string
+            if not isinstance(doi_value, str):
+                raise ValueError(f"DataCite API returned invalid DOI type: {type(doi_value).__name__}")
+            
+            # Validate DOI value is not empty
+            if not doi_value or doi_value.strip() == '':
+                raise ValueError("DataCite API returned empty DOI value")
+            
+            # Validate DOI length to prevent memory issues
+            if len(doi_value) >= MAX_STRING_LENGTH:
+                raise ValueError(f"DataCite API returned DOI exceeding maximum length ({MAX_STRING_LENGTH} chars)")
+            
+            # Validate DOI format (should start with "10.")
+            if not doi_value.startswith('10.'):
+                raise ValueError(f"DataCite API returned invalid DOI format: {doi_value} (DOI must start with '10.')")
+            
+            # Create and set the identifier
+            identifier = Identifier(identifier_value=doi_value, identifier_type="DOI")
+            self.set_identifier(identifier)
+            
+        except (KeyError, TypeError) as e:
+            raise ValueError(f"Failed to parse DataCite API response: {e}") from e
+        except ValueError:
+            # Re-raise ValueError as-is (these are our custom validation errors)
+            raise
 
 
 class Identifier():
@@ -698,4 +797,3 @@ class RelatedIdentifier():
 
         self._related_identifier_name = value
 
-    
